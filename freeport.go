@@ -312,6 +312,8 @@ func Take(n int) (ports []int, err error) {
 			if total == 0 {
 				return nil, fmt.Errorf("freeport: impossible to satisfy request; there are no actual free ports in the block anymore")
 			}
+			// if this warning starts to come up too often, consider dynamic allocation of another block
+			logf("WARN", "waiting for free ports to be available")
 			condNotEmpty.Wait()
 		}
 
