@@ -99,7 +99,7 @@ var (
 func initialize() {
 	var err error
 
-	blockSize = 128
+	blockSize = 2048
 	limit, err := systemLimit()
 	if err != nil {
 		panic("freeport: error getting system limit: " + err.Error())

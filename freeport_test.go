@@ -229,3 +229,116 @@ func TestIntervalOverlap(t *testing.T) {
 		})
 	}
 }
+
+func TestLargePortAllocationHang(t *testing.T) {
+	// NOTE: for global var reasons this cannot execute in parallel
+	// t.Parallel()
+
+	// Since this test is destructive (i.e. it leaks all ports) it means that
+	// any other test cases in this package will not function after it runs. To
+	// help out we reset the global state after we run this test.
+	defer reset()
+
+	// Initialize the system first with a simple take/return cycle
+	func() {
+		ports, err := Take(1)
+		if err != nil {
+			t.Fatalf("initialization failed: %v", err)
+		}
+		defer Return(ports)
+	}()
+
+	// Wait for stats to reset
+	waitForStatsReset := func() (numTotal int) {
+		t.Helper()
+		numTotal, numPending, numFree := stats()
+		if numTotal != numFree+numPending {
+			t.Fatalf("expected total (%d) and free+pending (%d) ports to match", numTotal, numFree+numPending)
+		}
+		assert.Eventually(t, func() bool {
+			numTotal, numPending, numFree = stats()
+			return numTotal == numFree && numPending == 0
+		}, 5*time.Second, 100*time.Millisecond, "expected total (%d) and free (%d) ports to match", numTotal, numFree)
+
+		return numTotal
+	}
+
+	numTotal := waitForStatsReset()
+	t.Logf("Total available ports: %d", numTotal)
+
+	// Test case 1: Try to allocate exactly 127 ports (one less than blockSize)
+	// This should work but might reveal timing issues
+	t.Run("allocate_127_ports", func(t *testing.T) {
+		if numTotal < 127 {
+			t.Skipf("Not enough ports available (%d) to test 127 port allocation", numTotal)
+		}
+
+		done := make(chan struct{})
+		var ports []int
+		var err error
+
+		// Use a goroutine with timeout to detect hanging
+		go func() {
+			defer close(done)
+			ports, err = Take(127)
+		}()
+
+		// Wait for the allocation to complete with a timeout
+		select {
+		case <-done:
+			if err != nil {
+				t.Fatalf("Failed to allocate 127 ports: %v", err)
+			}
+			t.Logf("Successfully allocated %d ports", len(ports))
+			Return(ports)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("Take(127) hung for more than 10 seconds - this indicates the bug")
+		}
+	})
+
+	// Reset
+	numTotal = waitForStatsReset()
+
+	// Test case 2: Try to allocate more than available ports in one shot
+	t.Run("allocate_all_ports", func(t *testing.T) {
+		want := numTotal + 1 // Requesting one more than available to trigger the bug
+		// Use a goroutine with timeout to detect hanging
+
+		ports, err := Take(want)
+		assert.ErrorContains(t, err, "block size too small")
+		Return(ports)
+	})
+
+	// Reset
+	numTotal = waitForStatsReset()
+
+	// Test case 3: Try to allocate more than available ports while some are in use
+	// This scenario is most likely to trigger the hanging behavior
+	t.Run("allocate_with_interference", func(t *testing.T) {
+		heldPorts, err := Take(numTotal)
+		assert.NoError(t, err, "Failed to take all ports")
+		t.Cleanup(func() { Return(heldPorts) })
+		// try to take one more than available and expect a timeout
+		done := make(chan struct{})
+		var ports []int
+		go func() {
+			defer close(done)
+			ports, err = Take(1)
+			t.Cleanup(func() { Return(ports) })
+		}()
+		// This should either succeed or fail quickly, not hang
+		var hung bool
+		select {
+		case <-done:
+			if err != nil {
+				t.Logf("Expected failure when requesting %d ports with %d held: %v", 1, len(heldPorts), err)
+			} else {
+				t.Logf("Unexpectedly succeeded in allocating %d ports with %d held", len(ports), len(heldPorts))
+				Return(ports)
+			}
+		case <-time.After(1 * time.Second):
+			hung = true
+		}
+		assert.True(t, hung, "Take(%d) with %d ports held should have hung but did not", 1, len(heldPorts))
+	})
+}
