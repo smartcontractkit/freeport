@@ -23,6 +23,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -100,6 +101,15 @@ func initialize() {
 	var err error
 
 	blockSize = 2048
+	if envBlockSize := os.Getenv("CL_RESERVE_PORTS"); envBlockSize != "" {
+		if parsed, err := strconv.Atoi(envBlockSize); err == nil && parsed > 0 {
+			blockSize = parsed
+			logf("INFO", "using blockSize %d from CL_RESERVE_PORTS environment variable", blockSize)
+		} else {
+			logf("WARN", "invalid CL_RESERVE_PORTS value %q, using default blockSize %d", envBlockSize, blockSize)
+		}
+	}
+
 	limit, err := systemLimit()
 	if err != nil {
 		panic("freeport: error getting system limit: " + err.Error())

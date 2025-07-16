@@ -342,3 +342,68 @@ func TestLargePortAllocationHang(t *testing.T) {
 		assert.True(t, hung, "Take(%d) with %d ports held should have hung but did not", 1, len(heldPorts))
 	})
 }
+
+func TestCLReservePortsEnvVar(t *testing.T) {
+	// NOTE: for global var reasons this cannot execute in parallel
+	// t.Parallel()
+
+	// Since this test modifies global state, reset after it runs
+	defer reset()
+
+	testCases := []struct {
+		name         string
+		envValue     string
+		expectedSize int
+		shouldUseEnv bool
+	}{
+		{
+			name:         "valid_small_block_size",
+			envValue:     "128",
+			expectedSize: 128,
+			shouldUseEnv: true,
+		},
+		{
+			name:         "valid_large_block_size",
+			envValue:     "4096",
+			expectedSize: 4096,
+			shouldUseEnv: true,
+		},
+		{
+			name:         "invalid_negative_value",
+			envValue:     "-100",
+			expectedSize: 2048, // should fall back to default
+			shouldUseEnv: false,
+		},
+		{
+			name:         "invalid_zero_value",
+			envValue:     "0",
+			expectedSize: 2048, // should fall back to default
+			shouldUseEnv: false,
+		},
+		{
+			name:         "invalid_non_numeric",
+			envValue:     "not_a_number",
+			expectedSize: 2048, // should fall back to default
+			shouldUseEnv: false,
+		},
+		{
+			name:         "empty_env_var",
+			envValue:     "",
+			expectedSize: 2048, // should use default
+			shouldUseEnv: false,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Reset state before each test case
+			reset()
+			t.Setenv("CL_RESERVE_PORTS", tc.envValue)
+			initialize()
+
+			// Check the stats to verify the block size was applied correctly
+			assert.Equal(t, blockSize, tc.expectedSize, "Expected total ports to match expected size")
+
+		})
+	}
+}
